@@ -52,11 +52,13 @@ def fetch_html(url):
 
 # ── Analyse ─────────────────────────────────────────────────────────────────
 
-IMG_MAP_RE = re.compile(
-    r"\[!\[[^\]]*\]\(([^)]+?\.(?:png|jpe?g|webp|gif))\)\]"
-    r"\((https?://[^\s)]+/catalogue/[^\s)]+\.aspx)\)",
-    re.I,
-)
+# n'importe quelle image markdown (liée à un objet ou non)
+IMG_ANY_RE = re.compile(
+    r"!\[[^\]]*\]\(([^)]+?\.(?:png|jpe?g|webp|gif))\)", re.I)
+
+# position de chaque titre d'objet
+HEAD_RE = re.compile(
+    r"###\s+\[[^\]]+\]\((https?://[^\s)]+/catalogue/[^\s)]+\.aspx)\)")
 
 ITEM_RE = re.compile(
     r"###\s+\[([^\]]+)\]\((https?://[^\s)]+/catalogue/[^\s)]+\.aspx)\)(.*?)"
@@ -70,12 +72,27 @@ def clean_title(t):
     return t.strip()
 
 
+def build_image_map_md(md):
+    """Associe à chaque objet la vignette qui le précède immédiatement,
+    que l'image soit un lien cliquable ou une simple image."""
+    imgs = [(m.start(), m.group(1).strip().replace(" ", "%20"))
+            for m in IMG_ANY_RE.finditer(md)]
+    mapping = {}
+    for h in HEAD_RE.finditer(md):
+        pos, url = h.start(), h.group(1).strip()
+        best = ""
+        for ipos, iurl in imgs:
+            if ipos < pos:
+                best = iurl
+            else:
+                break
+        if url not in mapping and best:
+            mapping[url] = best
+    return mapping
+
+
 def parse_items_md(md):
-    # carte image -> objet (le pouce cliquable pointe vers la même page)
-    imgs = {}
-    for m in IMG_MAP_RE.finditer(md):
-        img = m.group(1).strip().replace(" ", "%20")
-        imgs.setdefault(m.group(2).strip(), img)
+    imgs = build_image_map_md(md)
     items = []
     for m in ITEM_RE.finditer(md):
         title = clean_title(m.group(1))
@@ -103,6 +120,17 @@ def parse_items_html(html):
     except Exception:
         return []
     soup = BeautifulSoup(html, "html.parser")
+    # carte image : le pouce est un <a href=objet><img></a>
+    img_map = {}
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "/catalogue/" not in href or not href.endswith(".aspx"):
+            continue
+        im = a.find("img")
+        if im and im.get("src"):
+            u = href if href.startswith("http") else \
+                "https://shape2day.com" + ("" if href.startswith("/") else "/") + href
+            img_map.setdefault(u, im["src"].replace(" ", "%20"))
     out = []
     for h in soup.find_all("h3"):
         a = h.find("a", href=True)
@@ -116,22 +144,14 @@ def parse_items_html(html):
             continue
         url = href if href.startswith("http") else \
             "https://shape2day.com" + ("" if href.startswith("/") else "/") + href
-        ctx, img = "", ""
+        ctx = ""
         node = h
         for _ in range(6):
             node = node.find_next_sibling()
             if node is None or getattr(node, "name", None) == "h3":
                 break
             ctx += " " + node.get_text(" ", strip=True)
-        prev = h
-        for _ in range(4):
-            prev = prev.find_previous_sibling()
-            if prev is None:
-                break
-            im = prev.find("img") if hasattr(prev, "find") else None
-            if im and im.get("src"):
-                img = im["src"].replace(" ", "%20")
-                break
+        img = img_map.get(url, "")
         am = re.search(r"Available:?\s*(\d+)", ctx, re.I)
         pm = re.search(r"(\d+L\s*for\s*\d+" + EURO + r"|\d+" + EURO + r")", ctx)
         out.append({
