@@ -28,16 +28,23 @@ EURO = "\u20ac"
 
 # ── Récupération ────────────────────────────────────────────────────────────
 
-def http_get(url, timeout=45):
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
+def http_get(url, timeout=45, extra_headers=None):
+    headers = {"User-Agent": UA}
+    if extra_headers:
+        headers.update(extra_headers)
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", errors="replace")
 
 
 def fetch_markdown(url):
-    """Passe par le relais Jina, qui renvoie un markdown propre (avec images)."""
+    """Relais Jina, FORCÉ en lecture fraîche (sans cache) pour refléter
+    le catalogue vivant à chaque passage."""
     try:
-        return http_get("https://r.jina.ai/" + url)
+        return http_get(
+            "https://r.jina.ai/" + url,
+            extra_headers={"X-No-Cache": "true", "X-Respond-With": "markdown"},
+        )
     except Exception as e:
         print(f"  jina KO ({url}) : {e}", file=sys.stderr)
         return None
